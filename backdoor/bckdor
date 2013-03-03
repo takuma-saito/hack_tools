@@ -36,8 +36,10 @@ function connect_socat {
     sleep 2
     nc $target 80 < "$sendfile" 2>&1 >/dev/null &
     fg %1
+    sudo lsof -i:$port 1>/dev/null
+    [[ $? == 1 ]] || sudo pkill nc
     rm "$sendfile"
-    return 1
+    exit 0
 }
 
 function info {

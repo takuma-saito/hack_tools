@@ -1,0 +1,116 @@
+#!/bin/bash
+
+# This is dns scanner
+
+out() { printf "$1 $2\n" "${@:3}"; }
+error() { out "==> ERROR:" "$@"; } >&2
+die() { error "$@"; exit 1; }
+TRUE=1
+FALSE=
+
+# CIDR に合わせたネットワーク
+function set_network {
+    local net=($(echo $1 | tr '.' ' '))
+    local cidr=$2 mask = 0 i
+    for i in $cidr; do
+        mask=`expr $mask + $((1 + $mask << 1))`
+    done
+    mask=`expr $mask << $((32 - $cidr))`
+    echo $(($cidr & $mask))
+}
+
+# reverse array
+function rev_arr {
+    local i=0 value rev_arr index
+    for value in $@; do
+        rev_arr[$(($# - $i))]=$value
+        i=$(($i + 1))
+    done
+    echo ${rev_arr[*]}
+}
+
+# Show Bits Stream
+function show_bits {
+    echo $(echo "ibase=10;obase=2;$1" | bc)    
+}
+
+# Bit Stream -> Network Address
+function b2n {
+    local bits=$1 net i
+    for ((i = 3; i >= 0; i-- )) {
+        net[$i]=$(($bits % 256))
+        bits=$(($bits / 256))
+    }
+    echo $(echo ${net[@]} | tr ' ' '.')
+}
+
+# Network Address -> Bit Stream
+function n2b {
+    local net=($(echo $1 | tr '.' ' ')) bits=0 i
+    for (( i = $((${#net[@]} - 1)); i >= 0; i-- )) {
+        bits=$(($bits + ${net[$i]} * (256 ** $((3 - $i)))))
+    }
+    echo $bits
+}
+
+# CIDR に合わせたネットワーク
+function set_network {
+    local cidr=$2 mask=0 i
+    local net=$(n2b $1)
+    if [[ $cidr > 0 ]]; then
+        for i in $(seq 0 $(($cidr - 1))); do
+            mask=$(( $mask + 2 ** $i ))
+        done
+    fi
+    if [[ $cidr -le 31 ]]; then
+        for i in $(seq $cidr 31); do
+            mask=$(($mask * 2))
+        done
+    fi
+    # show_bits $net
+    # show_bits $mask
+    # show_bits $(($mask & $net))
+    echo $(($mask & $net))
+}
+
+function usage {
+    echo "dns-scan [-n] [-h] Network/CIDR"
+    exit 0
+}
+
+while getopts hn OPT; do
+    case "$OPT" in
+        n)
+            dry_run=$TRUE
+            ;;
+        h)
+            usage
+            ;;
+    esac
+done
+
+shift $(($OPTIND - 1))
+
+[[ $# < 1 ]] && usage
+net_arr=($(echo $1 | sed -e 's;/; ;'))
+net=$(set_network ${net_arr[@]})
+size=$(( (2 ** (32 - ${net_arr[1]}) - 1 )))
+dry_run=${dry_run:=$FALSE}
+if [[ $dry_run ]]; then
+    echo network: $(b2n $net)
+    echo size: $(($size + 1))
+fi
+
+for j in $(seq 0 $size); do
+    addr_net=$(b2n $net)
+    if [[ $dry_run ]]; then
+        echo [+] host $addr_net
+    else
+        result=$(host $addr_net)
+        # 成功の場合
+        if [[ $? == 0 ]]; then
+            echo "$addr_net -> $(echo $result | grep -Po '(?<=pointer )(.*)')"
+        fi
+    fi
+    net=$(($net + 1))
+done
